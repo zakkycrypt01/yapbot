@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
 from dotenv import load_dotenv
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+import json
 from telegram import Update, Document, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -33,6 +36,7 @@ TWITTER_API_SECRET = os.environ["TWITTER_API_SECRET"]
 TWITTER_ACCESS_TOKEN = os.environ["TWITTER_ACCESS_TOKEN"]
 TWITTER_ACCESS_SECRET = os.environ["TWITTER_ACCESS_SECRET"]
 TWITTER_BEARER_TOKEN = os.environ["TWITTER_BEARER_TOKEN"]
+HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8080"))
 
 # Validate environment variables
 if not all([TELEGRAM_BOT_TOKEN, TWITTER_API_KEY, TWITTER_API_SECRET,
@@ -42,6 +46,53 @@ if not all([TELEGRAM_BOT_TOKEN, TWITTER_API_KEY, TWITTER_API_SECRET,
 # Global storage for tweets and scheduler
 tweet_queue: List[Dict] = []
 scheduler = None
+ 
+# Optional: track a lightweight health snapshot
+def _latest_post_time() -> str:
+    try:
+        posted_times = [str(t.get('posted_at')) for t in tweet_queue if t.get('posted') and t.get('posted_at')]
+        return max(posted_times) if posted_times else ""
+    except Exception:
+        return ""
+
+def get_health() -> Dict:
+    sch = None
+    try:
+        sch = get_scheduler()
+    except Exception:
+        sch = None
+    return {
+        "status": "ok",
+        "queue_size": len([t for t in tweet_queue if not t.get('posted')]),
+        "total_items": len(tweet_queue),
+        "scheduler_running": bool(getattr(sch, 'running', False)),
+        "jobs": len(sch.get_jobs()) if sch else 0,
+        "last_posted_at": _latest_post_time()
+    }
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        if self.path in ("/", "/healthz", "/live", "/ready"):
+            payload = get_health()
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def start_health_server(port: int = HEALTH_PORT):
+    def _serve():
+        try:
+            httpd = HTTPServer(("0.0.0.0", port), HealthHandler)
+            logger.info(f"Health server listening on 0.0.0.0:{port}")
+            httpd.serve_forever()
+        except Exception as e:
+            logger.error(f"Health server failed: {e}")
+    Thread(target=_serve, daemon=True).start()
 
 def get_scheduler():
     """Get or create the scheduler"""
@@ -866,6 +917,9 @@ def main():
     
     # Scheduler will be initialized on-demand via get_scheduler()
     logger.info("Bot starting - scheduler will be initialized when needed")
+
+    # Start health server in background
+    start_health_server(HEALTH_PORT)
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))

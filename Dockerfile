@@ -23,6 +23,9 @@ RUN pip install --upgrade pip && \
 # Copy the application code
 COPY . .
 
+# Expose health port (informational)
+EXPOSE 8080
+
 # Default timezone can be overridden at runtime with -e TZ=...
 ENV TZ=UTC
 
