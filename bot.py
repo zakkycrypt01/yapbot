@@ -7,6 +7,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
+import time
+import urllib.request
 import json
 from telegram import Update, Document, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -93,6 +95,24 @@ def start_health_server(port: int = HEALTH_PORT):
         except Exception as e:
             logger.error(f"Health server failed: {e}")
     Thread(target=_serve, daemon=True).start()
+
+# --- Health ping thread ---
+def start_health_ping(interval: int = 30, url: str = "http://localhost:8080/healthz"):
+    def _ping():
+        while True:
+            try:
+                with urllib.request.urlopen(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = resp.read()
+                        import json
+                        payload = json.loads(data)
+                        logger.info(f"[HEALTH] status={payload.get('status')} queue={payload.get('queue_size')} jobs={payload.get('jobs')}")
+                    else:
+                        logger.warning(f"[HEALTH] Non-200 response: {resp.status}")
+            except Exception as e:
+                logger.error(f"[HEALTH] Ping failed: {e}")
+            time.sleep(interval)
+    Thread(target=_ping, daemon=True).start()
 
 def get_scheduler():
     """Get or create the scheduler"""
@@ -920,6 +940,8 @@ def main():
 
     # Start health server in background
     start_health_server(HEALTH_PORT)
+    # Start health ping in background
+    start_health_ping(30, f"https://yapbot-933z.onrender.com/ready")
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
