@@ -1,0 +1,13 @@
+services:
+  yapbot:
+    build: .
+    container_name: yapbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ:-UTC}
+    # If you want to mount a local folder for uploads or logs, uncomment:
+    # volumes:
+    #   - ./data:/app/data
+    #   - ./logs:/app/logs

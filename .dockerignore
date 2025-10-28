@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache/
+
+# Environments
+.env
+venv/
+.env.*
+
+# VCS
+.git/
+.gitignore
+
+# Data/uploads
+*.csv
+*.xlsx
+uploads/
+
+# OS files
+.DS_Store
+Thumbs.db
