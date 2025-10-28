@@ -40,16 +40,13 @@ TWITTER_ACCESS_SECRET = os.environ["TWITTER_ACCESS_SECRET"]
 TWITTER_BEARER_TOKEN = os.environ["TWITTER_BEARER_TOKEN"]
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8080"))
 
-# Validate environment variables
 if not all([TELEGRAM_BOT_TOKEN, TWITTER_API_KEY, TWITTER_API_SECRET,
            TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET, TWITTER_BEARER_TOKEN]):
     raise ValueError("Missing required environment variables")
 
-# Global storage for tweets and scheduler
 tweet_queue: List[Dict] = []
 scheduler = None
  
-# Optional: track a lightweight health snapshot
 def _latest_post_time() -> str:
     try:
         posted_times = [str(t.get('posted_at')) for t in tweet_queue if t.get('posted') and t.get('posted_at')]
@@ -96,7 +93,6 @@ def start_health_server(port: int = HEALTH_PORT):
             logger.error(f"Health server failed: {e}")
     Thread(target=_serve, daemon=True).start()
 
-# --- Health ping thread ---
 def start_health_ping(interval: int = 30, url: str = "http://localhost:8080/healthz"):
     def _ping():
         while True:
@@ -118,14 +114,11 @@ def get_scheduler():
     """Get or create the scheduler"""
     global scheduler
     try:
-        # Check if scheduler exists and is running
         if scheduler is not None and scheduler.running:
             return scheduler
     except Exception:
-        # In case of any error accessing scheduler, treat it as None
         pass
         
-    # Create new scheduler
     scheduler = AsyncIOScheduler(
         job_defaults={
             'coalesce': False,
@@ -159,7 +152,6 @@ class TweetPoster:
             tweet_id: Optional[str] = None
             data = getattr(response, 'data', None)
             if data is not None:
-                # Tweepy may return a dict or an object with id attr
                 if isinstance(data, dict):
                     tweet_id = data.get('id') or data.get('tweet_id')
                 else:
@@ -258,7 +250,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     document = update.message.document
     
-    # Check file type
     file_name = getattr(document, 'file_name', '')
     if not (file_name.endswith('.csv') or
             file_name.endswith('.xlsx') or
@@ -271,18 +262,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Downloading file...")
     
     try:
-        # Download file
         file = await context.bot.get_file(document.file_id)
         file_path = f"temp_{document.file_name}"
         await file.download_to_drive(file_path)
         
-        # Read spreadsheet
         if file_path.endswith('.csv'):
             df = pd.read_csv(file_path)
         else:
             df = pd.read_excel(file_path)
         
-        # Validate columns
         if 'tweet' not in df.columns:
             await update.message.reply_text(
                 "❌ Error: Spreadsheet must have a 'tweet' column"
@@ -290,10 +278,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(file_path)
             return
         
-        # Extract tweets
         tweets = df['tweet'].dropna().tolist()
         
-        # Filter valid tweets (not empty and under 280 chars)
         valid_tweets = []
         skipped = 0
         
@@ -306,10 +292,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         tweet_queue = valid_tweets
         
-        # Clean up
         os.remove(file_path)
         
-        # Send confirmation
         message = f"""
 ✅ *File processed successfully!*
 
@@ -406,13 +390,11 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("No tweets in queue")
         return
         
-    # Get fresh scheduler instance
     scheduler = get_scheduler()
     if scheduler is None:
         await update.message.reply_text("❌ Failed to initialize scheduler. Please try again.")
         return
         
-    # Clear any existing jobs
     scheduler.remove_all_jobs()
     logger.info("Removed existing jobs")
     
@@ -435,11 +417,9 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if schedule_type == 'daily' and len(context.args) > 1:
-            # Daily at specific time
             time_str = context.args[1]
             hour, minute = map(int, time_str.split(':'))
             
-            # Get fresh scheduler for adding job
             scheduler = get_scheduler()
             if scheduler is None:
                 await update.message.reply_text("❌ Failed to access scheduler. Please try again.")
@@ -457,7 +437,6 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Scheduled to post daily at {time_str}"
             )
         else:
-            # Interval-based
             interval_str = schedule_type
             minutes = parse_interval(interval_str)
             
@@ -469,13 +448,11 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Could not determine chat ID")
                 return
                 
-            # Get fresh scheduler for adding job
             scheduler = get_scheduler()
             if scheduler is None:
                 await update.message.reply_text("❌ Failed to access scheduler. Please try again.")
                 return
             
-            # For testing purposes, use 1 minute interval when user selects 30m
             actual_minutes = 1 if minutes == 30 else minutes
             scheduler.add_job(
                 post_next_tweet,
@@ -491,7 +468,6 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += " (running every minute for testing)"
             await update.message.reply_text(msg)
         
-        # Scheduler should already be running from get_scheduler()
         logger.info(f"Schedule updated successfully. Scheduler running: {scheduler.running}")
             
     except Exception as e:
@@ -504,18 +480,15 @@ def parse_interval(interval_str: str) -> int:
     """Parse interval string to minutes"""
     total_minutes = 0
     
-    # Parse hours
     if 'h' in interval_str:
         hours = int(interval_str.split('h')[0])
         total_minutes += hours * 60
         interval_str = interval_str.split('h')[1] if 'h' in interval_str else ''
     
-    # Parse minutes
     if 'm' in interval_str:
         minutes = int(interval_str.replace('m', ''))
         total_minutes += minutes
         
-    # Validate and ensure minimum interval
     if total_minutes <= 0:
         total_minutes = 1
     
@@ -532,12 +505,10 @@ async def post_next_tweet(bot, chat_id):
     
     logger.info(f"Posting next tweet... Queue size: {len(tweet_queue)}")
     
-    # Find next unposted tweet
     next_tweet = next((tweet for tweet in tweet_queue if not tweet.get('posted')), None)
     logger.info(f"Found next tweet to post: {next_tweet is not None}")
     
     if not next_tweet:
-        # Nothing to post – stop schedule and notify
         keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         try:
@@ -555,7 +526,6 @@ async def post_next_tweet(bot, chat_id):
             logger.info("All tweets posted, scheduler jobs removed")
         return
     
-    # Try to post the tweet (sync call inside async is OK for short work)
     try:
         success, tweet_id = tweet_poster.post_tweet(next_tweet['text'])
     except Exception as e:
@@ -615,7 +585,6 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
         
-    # Get scheduler status
     scheduler = get_scheduler()
     has_jobs = scheduler and len(scheduler.get_jobs()) > 0 if scheduler else False
         
@@ -651,7 +620,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global tweet_queue, scheduler
     
     if query.data == "menu":
-        # Main menu
         welcome_message = """
 🤖 *Tweet Scheduler Bot*
 
@@ -674,7 +642,6 @@ Choose an option below:
         await query.edit_message_text(welcome_message, parse_mode='Markdown', reply_markup=reply_markup)
     
     elif query.data == "help":
-        # Full help
         help_text = """
 📖 *Detailed Help*
 
@@ -701,7 +668,6 @@ More content to share
         await query.edit_message_text(help_text, parse_mode='Markdown', reply_markup=reply_markup)
     
     elif query.data == "help_upload":
-        # Upload instructions
         message = """
 📤 *Upload Instructions*
 
@@ -717,7 +683,6 @@ The bot will automatically process it!
         await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
     
     elif query.data == "help_schedule":
-        # Schedule options
         message = """
 ⏰ *Schedule Options*
 
@@ -750,7 +715,6 @@ Click a preset or use custom command:
         await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
     
     elif query.data == "status":
-        # Show status
         if not tweet_queue:
             keyboard = [[InlineKeyboardButton("📤 Upload Tweets", callback_data="help_upload")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -792,7 +756,6 @@ Total tweets: {total}
         await query.edit_message_text(status_message, parse_mode='Markdown', reply_markup=reply_markup)
     
     elif query.data == "preview":
-        # Preview tweets
         if not tweet_queue:
             await query.edit_message_text("📭 No tweets to preview!")
             return
@@ -816,7 +779,6 @@ Total tweets: {total}
         await query.edit_message_text(preview_text, parse_mode='Markdown', reply_markup=reply_markup)
     
     elif query.data == "confirm_clear":
-        # Confirm clear
         keyboard = [
             [
                 InlineKeyboardButton("✅ Yes, Clear All", callback_data="clear_confirm"),
@@ -830,10 +792,8 @@ Total tweets: {total}
         )
     
     elif query.data == "clear_confirm":
-        # Actually clear
         tweet_queue = []
         
-        # Get scheduler instance
         scheduler = get_scheduler()
         if scheduler:
             scheduler.remove_all_jobs()
@@ -846,7 +806,6 @@ Total tweets: {total}
             reply_markup=reply_markup
         )
     
-    # Schedule presets
     elif query and query.data and query.data.startswith("schedule_"):
         if not tweet_queue or not query.message or not query.message.chat:
             keyboard = [[InlineKeyboardButton("📤 Upload Tweets", callback_data="help_upload")]]
@@ -859,7 +818,6 @@ Total tweets: {total}
         
         schedule_type = query.data.replace("schedule_", "")
         
-        # Get scheduler instance
         scheduler = get_scheduler()
         if scheduler is None:
             await query.edit_message_text("❌ Failed to initialize scheduler. Please try again.")
@@ -871,15 +829,13 @@ Total tweets: {total}
             if not query or not query.message or not query.message.chat:
                 return
             
-            # Get fresh scheduler instance before adding job    
             scheduler = get_scheduler()
             if scheduler is None:
                 await query.edit_message_text("❌ Failed to access scheduler. Please try again.")
                 return
                 
-            # Note: Setting 30m to 1m for testing purposes
             if schedule_type == "30m":
-                scheduler.add_job(post_next_tweet, 'interval', minutes=1,  # Changed to 1 min for testing
+                scheduler.add_job(post_next_tweet, 'interval', minutes=1,  
                                 args=[context.bot, query.message.chat.id],
                                 id='tweet_job', replace_existing=True)
                 msg = "✅ Scheduled to post every minute (test mode)!"
@@ -909,7 +865,6 @@ Total tweets: {total}
                                 id='tweet_job', replace_existing=True)
                 msg = "✅ Scheduled to post daily at 6:00 PM!"
             
-            # Get fresh scheduler instance (will already be running)
             scheduler = get_scheduler()
             if scheduler is None:
                 await query.edit_message_text("❌ Failed to start scheduler. Please try again.")
@@ -932,18 +887,13 @@ Total tweets: {total}
 
 def main():
     """Start the bot"""
-    # Create application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Scheduler will be initialized on-demand via get_scheduler()
     logger.info("Bot starting - scheduler will be initialized when needed")
 
-    # Start health server in background
     start_health_server(HEALTH_PORT)
-    # Start health ping in background
     start_health_ping(30, f"https://yapbot-933z.onrender.com/ready")
     
-    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
@@ -952,7 +902,6 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
-    # Start bot
     logger.info("Bot started!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
